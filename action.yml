@@ -1,65 +1,50 @@
-name: 'Cache S3'
-description: 'actions/cache@v2 for AWS S3 and compatible software (forked Actions)'
-author: 'whywaita'
+name: "S3 Cache for GitHub Actions"
+description: "GitHub Action that allows you to cache build artifacts to S3"
+branding:
+  icon: "archive"
+  color: "green"
 inputs:
-  path:
-    description: 'A list of files, directories, and wildcard patterns to cache and restore'
-    required: true
-  key:
-    description: 'An explicit key for restoring and saving the cache'
-    required: true
-  restore-keys:
-    description: 'An ordered list of keys to use for restoring stale cache if no cache hit occurred for key. Note `cache-hit` returns false in this case.'
-    required: false
-  upload-chunk-size:
-    description: 'The chunk size used to split up large files during upload, in bytes'
-    required: false
-  enableCrossOsArchive:
-    description: 'An optional boolean when enabled, allows windows runners to save or restore caches that can be restored or saved respectively on other platforms'
-    default: 'false'
-    required: false
-  fail-on-cache-miss:
-    description: 'Fail the workflow if cache entry is not found'
-    default: 'false'
-    required: false
-  lookup-only:
-    description: 'Check if a cache entry exists for the given input(s) (key, restore-keys) without downloading the cache'
-    default: 'false'
-    required: false
-  aws-s3-bucket:
-    description: 'An AWS S3 bucket to save cache'
+  action:
+    description: "Action to perform. Options are: put, get, delete"
     required: true
   aws-access-key-id:
-    description: 'An AWS access key id to access the bucket'
-    required: false
+    description: "AWS access key id to access your bucket"
+    required: true
   aws-secret-access-key:
-    description: 'An AWS secret access key to access the bucket'
-    required: false
-  aws-session-token:
-    description: 'An AWS session token to access the bucket'
-    required: false
+    description: "AWS secret access key to access your bucket"
+    required: true
   aws-region:
-    description: 'An AWS region where the bucket is located'
+    description: "AWS region where your bucket is located"
+    required: true
+  bucket:
+    description: "AWS s3 bucket to store the artifacts"
+    required: true
+  key:
+    description: "An explicit key for restoring and saving the cache"
+    required: true
+  default-key:
+    description: "A default key for restoring similar cache in case the main key is not found"
+    required: true
+  artifacts:
+    description: "A list of files, directories and glob patterns to cache and restore"
     required: false
-  aws-endpoint:
-    description: 'An endpoint of AWS S3 (for compatible software)'
+  s3-class:
+    description: "Specifies the desired Storage Class for the object."
     required: false
-  aws-s3-bucket-endpoint:
-    description: 'Whether to use the bucket name as the endpoint for this request.'
-    required: false
-    default: 'true'
-  aws-s3-force-path-style:
-    description: 'Whether to force path style URLs for S3 objects.'
-    required: false
-    default: 'false'
-outputs:
-  cache-hit:
-    description: 'A boolean value to indicate an exact match was found for the primary key'
+    default: STANDARD
 runs:
-  using: 'node16'
-  main: 'dist/restore/index.js'
-  post: 'dist/save/index.js'
-  post-if: success()
-branding:
-  icon: 'archive'
-  color: 'gray-dark'
+  using: "composite"
+  steps:
+    - run: $GITHUB_ACTION_PATH/entrypoint.sh
+      shell: bash
+      env:
+        ACTION: ${{ inputs.action }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+        AWS_REGION: ${{ inputs.aws-region }}
+        BUCKET: ${{ inputs.bucket }}
+        S3_CLASS: ${{ inputs.s3-class }}
+        KEY: ${{ inputs.key }}
+        DEFAULT_KEY: ${{ inputs.default-key }}
+        ARTIFACTS: ${{ inputs.artifacts }}
+        OS: ${{ runner.os }}
