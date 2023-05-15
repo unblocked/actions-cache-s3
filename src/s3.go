@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"sort"
@@ -23,8 +24,23 @@ func GetRegion() string {
 	return region
 }
 
+func GetResolver() aws.EndpointResolverWithOptionsFunc {
+	return aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
+		if service == s3.ServiceID && region == "us-west-2" {
+			return aws.Endpoint{
+				PartitionID:   "aws",
+				URL:           fmt.Sprintf("https://s3.%s.amazonaws.com", GetRegion()),
+				SigningRegion: GetRegion(),
+			}, nil
+		}
+		return aws.Endpoint{}, fmt.Errorf("unknown endpoint requested")
+	})
+}
+
 func GetLatestObject(key string, bucket string) (string, error) {
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(GetRegion()))
+
+	customResolver := GetResolver()
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEndpointResolverWithOptions(customResolver))
 	session := s3.NewFromConfig(cfg)
 	if err != nil {
 		return "", err
@@ -53,7 +69,8 @@ func GetLatestObject(key string, bucket string) (string, error) {
 
 // PutObject - Upload object to s3 bucket
 func PutObject(key string, bucket string, s3Class string) error {
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(GetRegion()))
+	customResolver := GetResolver()
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEndpointResolverWithOptions(customResolver))
 	session := s3.NewFromConfig(cfg)
 	if err != nil {
 		return err
@@ -94,7 +111,8 @@ func PutObject(key string, bucket string, s3Class string) error {
 // GetObject - Get object from s3 bucket
 func GetObject(key string, bucket string) error {
 	start := time.Now()
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(GetRegion()))
+	customResolver := GetResolver()
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEndpointResolverWithOptions(customResolver))
 	if err != nil {
 		return err
 	}
@@ -132,7 +150,8 @@ func GetObject(key string, bucket string) error {
 
 // DeleteObject - Delete object from s3 bucket
 func DeleteObject(key string, bucket string) error {
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(GetRegion()))
+	customResolver := GetResolver()
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEndpointResolverWithOptions(customResolver))
 	if err != nil {
 		return err
 	}
@@ -159,7 +178,8 @@ func DeleteObject(key string, bucket string) error {
 
 // ObjectProperties - Get object properties in s3
 func ObjectProperties(key string, bucket string) (*s3.HeadObjectOutput, error) {
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(GetRegion()))
+	customResolver := GetResolver()
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEndpointResolverWithOptions(customResolver))
 	if err != nil {
 		return nil, err
 	}
