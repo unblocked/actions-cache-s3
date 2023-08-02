@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	zstd "github.com/klauspost/compress/zstd"
@@ -41,6 +42,8 @@ func Zip(filename string, artifacts []string) error {
 				}
 
 				log.Printf("File: %s", file)
+
+				PrintMemUsage()
 
 				// must provide real name
 				// (see https://golang.org/src/archive/tar/common.go?#L626)
@@ -169,4 +172,24 @@ func getReadableBytes(b int64) string {
 	}
 	return fmt.Sprintf("%.1f %cB",
 		float64(b)/float64(div), "kMGTPE"[exp])
+}
+
+func PrintMemUsage() {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+
+	// Live objects = Mallocs - Frees
+	liveObjects := m.Mallocs - m.Frees
+
+	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
+	fmt.Printf("Alloc = %v MiB", bToMb(m.Alloc))
+	fmt.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
+	fmt.Printf("\tSys = %v MiB", bToMb(m.Sys))
+	fmt.Printf("\tLiveObjects = %v", liveObjects)
+	fmt.Printf("\tHeapAlloc = %v MiB", bToMb(m.HeapAlloc))
+	fmt.Printf("\tNumGC = %v\n", m.NumGC)
+}
+
+func bToMb(b uint64) uint64 {
+	return b / 1024 / 1024
 }
