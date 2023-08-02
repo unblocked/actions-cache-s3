@@ -23,3 +23,8 @@ run-local:
 	./run.sh $(args)
 .PHONY: run-local
 
+update-dependencies:
+	go get -u ./...
+	go mod tidy
+.PHONY: update-dependencies
+

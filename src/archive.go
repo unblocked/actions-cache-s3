@@ -56,6 +56,8 @@ func Zip(filename string, artifacts []string) error {
 					if err != nil {
 						return err
 					}
+
+					defer data.Close()
 					if _, err := io.Copy(tw, data); err != nil {
 						return err
 					}
@@ -145,7 +147,7 @@ func Unzip(filename string) error {
 				log.Printf("Failed setting timestamps to %s", target)
 				panic(err)
 			}
-			// manually close here after each file operation; defering would cause each file close
+			// manually close here after each file operation; deferring would cause each file close
 			// to wait until all operations have completed.
 			fileToWrite.Close()
 		}
