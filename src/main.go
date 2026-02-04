@@ -49,7 +49,12 @@ func main() {
 
 		uploadErr := StreamUpload(ctx, reader, action.Key, action.Bucket, action.S3Class)
 
-		// Check for compression errors
+		// If upload failed, close reader to unblock the compression goroutine
+		if uploadErr != nil {
+			reader.Close()
+		}
+
+		// Wait for compression to complete
 		compressErr := <-errChan
 
 		if compressErr != nil {

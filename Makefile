@@ -19,10 +19,6 @@ tag:
 	git push --force --tags
 .PHONY: tag
 
-run-local:
-	./run.sh $(args)
-.PHONY: run-local
-
 update-dependencies:
 	go get -u ./...
 	go mod tidy
@@ -48,4 +44,9 @@ test-minio-up:
 test-minio-down:
 	docker compose -f docker-compose.test.yml down -v
 .PHONY: test-minio-down
+
+# Assume IAM role and update credentials in .env
+setup-local-env:
+	./scripts/setup-local-env.sh
+.PHONY: setup-local-env
 
