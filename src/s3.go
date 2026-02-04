@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"sort"
@@ -16,32 +15,32 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-func GetRegion() string {
+// getS3Client creates a new S3 client with the configured region and optional custom endpoint
+func getS3Client(ctx context.Context) (*s3.Client, error) {
 	region := os.Getenv("AWS_REGION")
 	if region == "" {
-		return "us-east-1"
+		region = "us-east-1"
 	}
-	return region
-}
 
-func GetResolver() aws.EndpointResolverWithOptionsFunc {
-	return aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-		if service == s3.ServiceID && region == "us-west-2" {
-			return aws.Endpoint{
-				PartitionID:   "aws",
-				URL:           fmt.Sprintf("https://s3.%s.amazonaws.com", GetRegion()),
-				SigningRegion: GetRegion(),
-			}, nil
-		}
-		return aws.Endpoint{}, fmt.Errorf("unknown endpoint requested")
-	})
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	if err != nil {
+		return nil, err
+	}
+
+	// Check for custom endpoint (useful for S3-compatible services like MinIO, LocalStack)
+	customEndpoint := os.Getenv("AWS_S3_ENDPOINT")
+	if customEndpoint != "" {
+		return s3.NewFromConfig(cfg, func(o *s3.Options) {
+			o.BaseEndpoint = aws.String(customEndpoint)
+			o.UsePathStyle = true // Required for most S3-compatible services
+		}), nil
+	}
+
+	return s3.NewFromConfig(cfg), nil
 }
 
 func GetLatestObject(key string, bucket string) (string, error) {
-
-	customResolver := GetResolver()
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEndpointResolverWithOptions(customResolver))
-	session := s3.NewFromConfig(cfg)
+	session, err := getS3Client(context.TODO())
 	if err != nil {
 		return "", err
 	}
@@ -61,17 +60,25 @@ func GetLatestObject(key string, bucket string) (string, error) {
 	}
 
 	sort.Slice(files, func(i, j int) bool {
+		// Handle nil LastModified pointers safely
+		if files[i].LastModified == nil {
+			return false
+		}
+		if files[j].LastModified == nil {
+			return true
+		}
 		return files[i].LastModified.After(*files[j].LastModified)
 	})
 
+	if files[0].Key == nil {
+		return "", errors.New("latest file has nil key")
+	}
 	return *files[0].Key, nil
 }
 
 // PutObject - Upload object to s3 bucket
 func PutObject(key string, bucket string, s3Class string) error {
-	customResolver := GetResolver()
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEndpointResolverWithOptions(customResolver))
-	session := s3.NewFromConfig(cfg)
+	session, err := getS3Client(context.TODO())
 	if err != nil {
 		return err
 	}
@@ -111,8 +118,7 @@ func PutObject(key string, bucket string, s3Class string) error {
 // GetObject - Get object from s3 bucket
 func GetObject(key string, bucket string) error {
 	start := time.Now()
-	customResolver := GetResolver()
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEndpointResolverWithOptions(customResolver))
+	session, err := getS3Client(context.TODO())
 	if err != nil {
 		return err
 	}
@@ -123,7 +129,6 @@ func GetObject(key string, bucket string) error {
 	}
 	defer outFile.Close()
 
-	session := s3.NewFromConfig(cfg)
 	downloader := manager.NewDownloader(session)
 
 	_, err = downloader.Download(context.TODO(), outFile, &s3.GetObjectInput{
@@ -150,12 +155,10 @@ func GetObject(key string, bucket string) error {
 
 // DeleteObject - Delete object from s3 bucket
 func DeleteObject(key string, bucket string) error {
-	customResolver := GetResolver()
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEndpointResolverWithOptions(customResolver))
+	session, err := getS3Client(context.TODO())
 	if err != nil {
 		return err
 	}
-	session := s3.NewFromConfig(cfg)
 
 	objProps, err := ObjectProperties(key, bucket)
 	if err != nil || objProps == nil {
@@ -170,7 +173,11 @@ func DeleteObject(key string, bucket string) error {
 
 	_, err = session.DeleteObject(context.TODO(), i)
 	if err == nil {
-		log.Printf("Cache deleted %s (%s) successfully", key, getReadableBytes(objProps.ContentLength))
+		var size int64
+		if objProps.ContentLength != nil {
+			size = *objProps.ContentLength
+		}
+		log.Printf("Cache deleted %s (%s) successfully", key, getReadableBytes(size))
 	}
 
 	return err
@@ -178,12 +185,10 @@ func DeleteObject(key string, bucket string) error {
 
 // ObjectProperties - Get object properties in s3
 func ObjectProperties(key string, bucket string) (*s3.HeadObjectOutput, error) {
-	customResolver := GetResolver()
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEndpointResolverWithOptions(customResolver))
+	session, err := getS3Client(context.TODO())
 	if err != nil {
 		return nil, err
 	}
-	session := s3.NewFromConfig(cfg)
 
 	i := &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),

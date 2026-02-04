@@ -34,7 +34,12 @@ func Zip(filename string, artifacts []string) error {
 		}
 		for _, match := range matches {
 			// walk through every file in the folder
-			filepath.Walk(match, func(file string, fi os.FileInfo, err error) error {
+			walkErr := filepath.Walk(match, func(file string, fi os.FileInfo, err error) error {
+				// Check for walk errors first
+				if err != nil {
+					return err
+				}
+
 				// generate tar header
 				header, err := tar.FileInfoHeader(fi, file)
 				if err != nil {
@@ -64,10 +69,12 @@ func Zip(filename string, artifacts []string) error {
 					if _, err := io.Copy(tw, data); err != nil {
 						return err
 					}
-					return nil
 				}
 				return nil
 			})
+			if walkErr != nil {
+				return walkErr
+			}
 		}
 	}
 
@@ -83,21 +90,22 @@ func Zip(filename string, artifacts []string) error {
 	// write the .tar.gzip
 	fileToWrite, err := os.OpenFile(filename, os.O_CREATE|os.O_RDWR, os.FileMode(0600))
 	if err != nil {
-		log.Printf("Failed to open file \"%s\"", filename)
-		panic(err)
+		return fmt.Errorf("failed to open file %q: %w", filename, err)
 	}
+	defer fileToWrite.Close()
+
 	if _, err := io.Copy(fileToWrite, &buf); err != nil {
-		log.Printf("Failed copying buffer to open file %s", filename)
-		panic(err)
+		return fmt.Errorf("failed copying buffer to open file %s: %w", filename, err)
 	}
+
 	elapsed := time.Since(start)
 	file, err := fileToWrite.Stat()
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("failed to stat file %s: %w", filename, err)
 	}
 
 	log.Printf("Successfully zipped %v in %s!", getReadableBytes(file.Size()), elapsed)
-	return os.Chmod(filename, 0777)
+	return nil
 }
 
 // Unzip - Unzip all files and directories inside .zip file
@@ -107,11 +115,13 @@ func Unzip(filename string) error {
 	if err != nil {
 		return err
 	}
+	defer file.Close()
 
 	zr, err := zstd.NewReader(file, zstd.WithDecoderConcurrency(5))
 	if err != nil {
 		return err
 	}
+	defer zr.Close()
 
 	tarReader := tar.NewReader(zr)
 
@@ -131,32 +141,37 @@ func Unzip(filename string) error {
 			// Create the directory that contains it
 			dir := filepath.Dir(target)
 			if err := os.MkdirAll(dir, 0755); err != nil {
-				log.Printf("Failed to create directory %s", dir)
+				return fmt.Errorf("failed to create directory %s: %w", dir, err)
 			}
 
 			// Write the file
-			fileToWrite, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.FileMode(header.Mode))
-			if err != nil {
-				log.Printf("Failed creating %s", target)
-				panic(err)
+			if err := extractFile(target, header, tarReader); err != nil {
+				return err
 			}
-			// Copy over contents
-			if _, err := io.Copy(fileToWrite, tarReader); err != nil {
-				log.Printf("Failed copying contents to %s", target)
-				panic(err)
-			}
-			err = os.Chtimes(header.Name, header.AccessTime, header.ModTime)
-			if err != nil {
-				log.Printf("Failed setting timestamps to %s", target)
-				panic(err)
-			}
-			// manually close here after each file operation; deferring would cause each file close
-			// to wait until all operations have completed.
-			fileToWrite.Close()
 		}
 	}
 	elapsed := time.Since(start)
 	log.Printf("Successfully unzipped: %s in %s", filename, elapsed)
+	return nil
+}
+
+// extractFile extracts a single file from the tar reader
+func extractFile(target string, header *tar.Header, tarReader *tar.Reader) error {
+	fileToWrite, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.FileMode(header.Mode))
+	if err != nil {
+		return fmt.Errorf("failed creating %s: %w", target, err)
+	}
+	defer fileToWrite.Close()
+
+	// Copy over contents
+	if _, err := io.Copy(fileToWrite, tarReader); err != nil {
+		return fmt.Errorf("failed copying contents to %s: %w", target, err)
+	}
+
+	if err := os.Chtimes(header.Name, header.AccessTime, header.ModTime); err != nil {
+		return fmt.Errorf("failed setting timestamps to %s: %w", target, err)
+	}
+
 	return nil
 }
 

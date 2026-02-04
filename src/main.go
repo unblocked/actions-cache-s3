@@ -19,7 +19,7 @@ func main() {
 
 	switch act := action.Action; act {
 	case PutAction:
-		if len(action.Artifacts[0]) <= 0 {
+		if len(action.Artifacts) == 0 || len(action.Artifacts[0]) == 0 {
 			log.Fatal("No artifacts patterns provided")
 		}
 
