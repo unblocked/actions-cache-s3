@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"os"
 	"sort"
 	"time"
@@ -100,7 +100,7 @@ func PutObject(key string, bucket string, s3Class string) error {
 	}
 
 	start := time.Now()
-	log.Printf("Uploading %v worth of cache", getReadableBytes(fileSize.Size()))
+	slog.Info("uploading cache", "size", getReadableBytes(fileSize.Size()))
 	_, err = uploader.Upload(context.TODO(), &s3.PutObjectInput{
 		Bucket:       aws.String(bucket),
 		Key:          aws.String(key),
@@ -109,7 +109,7 @@ func PutObject(key string, bucket string, s3Class string) error {
 	})
 	if err == nil {
 		elapsed := time.Since(start)
-		log.Printf("Cache saved %s (%s) successfully in %s!", key, getReadableBytes(fileSize.Size()), elapsed)
+		slog.Info("cache saved successfully", "key", key, "size", getReadableBytes(fileSize.Size()), "duration", elapsed)
 	}
 
 	return err
@@ -147,7 +147,7 @@ func GetObject(key string, bucket string) error {
 	fileSize, err := outFile.Stat()
 	if err == nil {
 		elapsed := time.Since(start)
-		log.Printf("%s (%s) successfully downloaded in %s", key, getReadableBytes(fileSize.Size()), elapsed)
+		slog.Info("cache downloaded successfully", "key", key, "size", getReadableBytes(fileSize.Size()), "duration", elapsed)
 	}
 
 	return err
@@ -162,7 +162,7 @@ func DeleteObject(key string, bucket string) error {
 
 	objProps, err := ObjectProperties(key, bucket)
 	if err != nil || objProps == nil {
-		log.Printf("Cannot delete %s because it likely does not exist", key)
+		slog.Warn("cannot delete cache, likely does not exist", "key", key)
 		return err
 	}
 
@@ -177,7 +177,7 @@ func DeleteObject(key string, bucket string) error {
 		if objProps.ContentLength != nil {
 			size = *objProps.ContentLength
 		}
-		log.Printf("Cache deleted %s (%s) successfully", key, getReadableBytes(size))
+		slog.Info("cache deleted successfully", "key", key, "size", getReadableBytes(size))
 	}
 
 	return err

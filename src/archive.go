@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,7 +17,7 @@ import (
 // Zip - Create .zip file and add dirs and files that match glob patterns
 func Zip(filename string, artifacts []string) error {
 	start := time.Now()
-	log.Printf("Starting to zip: %s", filename)
+	slog.Info("starting to zip", "filename", filename)
 	// tar + gzip
 	var buf bytes.Buffer
 	zw, err := zstd.NewWriter(&buf, zstd.WithEncoderConcurrency(5))
@@ -27,7 +27,7 @@ func Zip(filename string, artifacts []string) error {
 	tw := tar.NewWriter(zw)
 
 	for _, pattern := range artifacts {
-		log.Printf("Zipping pattern: %s", pattern)
+		slog.Debug("zipping pattern", "pattern", pattern)
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
 			return err
@@ -46,7 +46,7 @@ func Zip(filename string, artifacts []string) error {
 					return err
 				}
 
-				log.Printf("File: %s", file)
+				slog.Debug("adding file to archive", "file", file)
 
 				PrintMemUsage()
 
@@ -104,7 +104,7 @@ func Zip(filename string, artifacts []string) error {
 		return fmt.Errorf("failed to stat file %s: %w", filename, err)
 	}
 
-	log.Printf("Successfully zipped %v in %s!", getReadableBytes(file.Size()), elapsed)
+	slog.Info("successfully zipped", "size", getReadableBytes(file.Size()), "duration", elapsed)
 	return nil
 }
 
@@ -151,7 +151,7 @@ func Unzip(filename string) error {
 		}
 	}
 	elapsed := time.Since(start)
-	log.Printf("Successfully unzipped: %s in %s", filename, elapsed)
+	slog.Info("successfully unzipped", "filename", filename, "duration", elapsed)
 	return nil
 }
 
@@ -197,12 +197,14 @@ func PrintMemUsage() {
 	liveObjects := m.Mallocs - m.Frees
 
 	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
-	fmt.Printf("Alloc = %v MiB", bToMb(m.Alloc))
-	fmt.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
-	fmt.Printf("\tSys = %v MiB", bToMb(m.Sys))
-	fmt.Printf("\tLiveObjects = %v", liveObjects)
-	fmt.Printf("\tHeapAlloc = %v MiB", bToMb(m.HeapAlloc))
-	fmt.Printf("\tNumGC = %v\n", m.NumGC)
+	slog.Debug("memory usage",
+		"alloc_mib", bToMb(m.Alloc),
+		"total_alloc_mib", bToMb(m.TotalAlloc),
+		"sys_mib", bToMb(m.Sys),
+		"live_objects", liveObjects,
+		"heap_alloc_mib", bToMb(m.HeapAlloc),
+		"num_gc", m.NumGC,
+	)
 }
 
 func bToMb(b uint64) uint64 {

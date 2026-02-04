@@ -2,12 +2,14 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 )
 
 func main() {
+	InitLogger()
+
 	action := Action{
 		Action:     os.Getenv("ACTION"),
 		Bucket:     os.Getenv("BUCKET"),
@@ -20,63 +22,69 @@ func main() {
 	switch act := action.Action; act {
 	case PutAction:
 		if len(action.Artifacts) == 0 || len(action.Artifacts[0]) == 0 {
-			log.Fatal("No artifacts patterns provided")
+			slog.Error("no artifacts patterns provided")
+			os.Exit(1)
 		}
 
 		shouldSkip, err := ObjectExists(action.Key, action.Bucket)
 		if err != nil {
-			log.Fatal(err)
+			slog.Error("failed to check if object exists", "error", err)
+			os.Exit(1)
 		}
 		if shouldSkip {
-			log.Printf("Cache hit! Skipping cache upload!")
+			slog.Info("cache hit, skipping cache upload")
 			return
 		} else {
-			log.Printf("Cache miss")
+			slog.Info("cache miss")
 		}
 
 		if err := Zip(action.Key, action.Artifacts); err != nil {
-			log.Fatal(err)
+			slog.Error("failed to zip artifacts", "error", err)
+			os.Exit(1)
 		}
 
 		if err := PutObject(action.Key, action.Bucket, action.S3Class); err != nil {
-			log.Fatal(err)
+			slog.Error("failed to upload cache", "error", err)
+			os.Exit(1)
 		}
 	case GetAction:
-		log.Printf("Attempting to restore %s", action.Key)
+		slog.Info("attempting to restore cache", "key", action.Key)
 		exists, err := ObjectExists(action.Key, action.Bucket)
 		if err != nil {
-			log.Fatal(err)
+			slog.Error("failed to check if object exists", "error", err)
+			os.Exit(1)
 		}
 		// Get and and unzip
 		var filename string
 		if exists {
-			log.Print("Cache hit, starting download")
+			slog.Info("cache hit, starting download")
 			filename = action.Key
 		} else {
-			log.Printf("No caches found for the following key: %s", action.Key)
-			log.Printf("Querying for cache matching default key: %s", action.DefaultKey)
+			slog.Info("no cache found for key, trying default", "key", action.Key, "default_key", action.DefaultKey)
 			filename, err = GetLatestObject(action.DefaultKey, action.Bucket)
 			if err != nil {
-				log.Print(err)
-				log.Print("Skipping cache download")
+				slog.Warn("no cache found, skipping download", "error", err)
 				return
 			}
-			log.Printf("Defaulting to latest similar key: %s", filename)
+			slog.Info("defaulting to latest similar key", "filename", filename)
 		}
 		err = GetObject(filename, action.Bucket)
 		if err != nil {
-			log.Fatal(err)
+			slog.Error("failed to download cache", "error", err)
+			os.Exit(1)
 		}
 
 		if err := Unzip(filename); err != nil {
-			log.Printf("Failed to unzip %s", filename)
-			log.Fatal(err)
+			slog.Error("failed to unzip cache", "filename", filename, "error", err)
+			os.Exit(1)
 		}
 	case DeleteAction:
 		if err := DeleteObject(action.Key, action.Bucket); err != nil {
-			log.Fatal(err)
+			slog.Error("failed to delete cache", "error", err)
+			os.Exit(1)
 		}
 	default:
-		log.Fatalf("Action \"%s\" is not allowed. Valid options are: [%s, %s, %s]", act, PutAction, DeleteAction, GetAction)
+		slog.Error("invalid action", "action", act, "valid_options", []string{PutAction, DeleteAction, GetAction})
+		os.Exit(1)
 	}
 }
