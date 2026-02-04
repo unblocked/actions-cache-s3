@@ -276,24 +276,4 @@ func getReadableBytes(b int64) string {
 		float64(b)/float64(div), "kMGTPE"[exp])
 }
 
-func PrintMemUsage() {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
 
-	// Live objects = Mallocs - Frees
-	liveObjects := m.Mallocs - m.Frees
-
-	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
-	slog.Debug("memory usage",
-		"alloc_mib", bToMb(m.Alloc),
-		"total_alloc_mib", bToMb(m.TotalAlloc),
-		"sys_mib", bToMb(m.Sys),
-		"live_objects", liveObjects,
-		"heap_alloc_mib", bToMb(m.HeapAlloc),
-		"num_gc", m.NumGC,
-	)
-}
-
-func bToMb(b uint64) uint64 {
-	return b / 1024 / 1024
-}
