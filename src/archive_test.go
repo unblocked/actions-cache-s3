@@ -198,10 +198,10 @@ func TestZipGlobPatterns(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		patterns       []string
-		expectFiles    map[string]string // path -> expected content
-		expectSuccess  bool
+		name          string
+		patterns      []string
+		expectFiles   map[string]string // path -> expected content
+		expectSuccess bool
 	}{
 		{
 			name:     "directory path includes all files recursively",

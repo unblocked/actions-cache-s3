@@ -37,10 +37,13 @@ func Zip(filename string, artifacts []string) error {
 
 	var fileCount int
 	for _, pattern := range artifacts {
-		slog.Debug("zipping pattern", "pattern", pattern)
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
 			return err
+		}
+		slog.Debug("processing pattern", "pattern", pattern, "matches", len(matches))
+		if len(matches) == 0 {
+			slog.Warn("no matches for pattern", "pattern", pattern)
 		}
 		for _, match := range matches {
 			// walk through every file in the folder
@@ -76,6 +79,7 @@ func Zip(filename string, artifacts []string) error {
 						return err
 					}
 					fileCount++
+					slog.Debug("added file to archive", "file", file, "size", fi.Size())
 				}
 				return nil
 			})
@@ -130,11 +134,14 @@ func ZipStream(artifacts []string) (io.ReadCloser, <-chan error) {
 
 		var fileCount int
 		for _, pattern := range artifacts {
-			slog.Debug("streaming pattern", "pattern", pattern)
 			matches, err := filepath.Glob(pattern)
 			if err != nil {
 				errChan <- err
 				return
+			}
+			slog.Debug("streaming pattern", "pattern", pattern, "matches", len(matches))
+			if len(matches) == 0 {
+				slog.Warn("no matches for pattern", "pattern", pattern)
 			}
 			for _, match := range matches {
 				walkErr := filepath.Walk(match, func(file string, fi os.FileInfo, err error) error {
@@ -164,6 +171,7 @@ func ZipStream(artifacts []string) (io.ReadCloser, <-chan error) {
 							return err
 						}
 						fileCount++
+						slog.Debug("added file to archive", "file", file, "size", fi.Size())
 					}
 					return nil
 				})
@@ -275,5 +283,3 @@ func getReadableBytes(b int64) string {
 	return fmt.Sprintf("%.1f %cB",
 		float64(b)/float64(div), "kMGTPE"[exp])
 }
-
-
