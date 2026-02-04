@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -38,15 +40,29 @@ func main() {
 			slog.Info("cache miss")
 		}
 
-		if err := Zip(action.Key, action.Artifacts); err != nil {
-			slog.Error("failed to zip artifacts", "error", err)
+		// Stream compression directly to S3 without creating a temp file
+		start := time.Now()
+		slog.Info("starting streaming upload", "key", action.Key)
+
+		reader, errChan := ZipStream(action.Artifacts)
+		ctx := context.Background()
+
+		uploadErr := StreamUpload(ctx, reader, action.Key, action.Bucket, action.S3Class)
+
+		// Check for compression errors
+		compressErr := <-errChan
+
+		if compressErr != nil {
+			slog.Error("failed to compress artifacts", "error", compressErr)
+			os.Exit(1)
+		}
+		if uploadErr != nil {
+			slog.Error("failed to upload cache", "error", uploadErr)
 			os.Exit(1)
 		}
 
-		if err := PutObject(action.Key, action.Bucket, action.S3Class); err != nil {
-			slog.Error("failed to upload cache", "error", err)
-			os.Exit(1)
-		}
+		elapsed := time.Since(start)
+		slog.Info("cache saved successfully", "key", action.Key, "duration", elapsed)
 	case GetAction:
 		slog.Info("attempting to restore cache", "key", action.Key)
 		exists, err := ObjectExists(action.Key, action.Bucket)

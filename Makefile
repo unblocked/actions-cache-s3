@@ -28,3 +28,24 @@ update-dependencies:
 	go mod tidy
 .PHONY: update-dependencies
 
+# Run unit tests only (no Docker required)
+test-unit:
+	go test -v ./src -run "TestZip|TestGetReadableBytes|TestOptimalPartSize"
+.PHONY: test-unit
+
+# Run all tests including S3 integration (requires Docker)
+test:
+	./scripts/test.sh
+.PHONY: test
+
+# Start MinIO for manual testing
+test-minio-up:
+	docker compose -f docker-compose.test.yml up -d
+	@echo "MinIO console: http://localhost:9001 (minioadmin/minioadmin)"
+.PHONY: test-minio-up
+
+# Stop MinIO
+test-minio-down:
+	docker compose -f docker-compose.test.yml down -v
+.PHONY: test-minio-down
+
