@@ -40,4 +40,3 @@ func InitLogger() {
 func SetLogLevel(level slog.Level) {
 	logLevel.Set(level)
 }
-

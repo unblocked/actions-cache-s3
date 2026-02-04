@@ -154,4 +154,3 @@ func TestZipStream(t *testing.T) {
 		t.Errorf("content mismatch: got %q, want %q", string(content), testContent)
 	}
 }
-

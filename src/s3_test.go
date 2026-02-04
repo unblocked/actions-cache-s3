@@ -145,9 +145,9 @@ func TestOptimalPartSize(t *testing.T) {
 		fileSize int64
 		expected int64
 	}{
-		{1024, minPartSize},                      // Small file -> min part size
-		{100 * 1024 * 1024, minPartSize},         // 100 MB -> min part size
-		{50 * 1024 * 1024 * 1024, 6 * 1024 * 1024}, // 50 GB -> ~5 MiB rounded up
+		{1024, minPartSize},                          // Small file -> min part size
+		{100 * 1024 * 1024, minPartSize},             // 100 MB -> min part size
+		{50 * 1024 * 1024 * 1024, 6 * 1024 * 1024},   // 50 GB -> ~5 MiB rounded up
 		{500 * 1024 * 1024 * 1024, 51 * 1024 * 1024}, // 500 GB -> ~50 MiB
 	}
 
@@ -178,4 +178,3 @@ func TestGetReadableBytes(t *testing.T) {
 		}
 	}
 }
-
