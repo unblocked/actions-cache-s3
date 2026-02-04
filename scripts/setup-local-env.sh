@@ -6,6 +6,22 @@ set -e
 ROLE_ARN="arn:aws:iam::877923746456:role/IAMS3AccessRole-unblocked-gh-actions-s3-cache"
 PROFILE="deploybot"
 
+# Create .env with defaults if it doesn't exist
+if [ ! -f .env ]; then
+    echo "Creating .env with default values..."
+    cat > .env << 'EOF'
+export AWS_REGION="us-west-2"
+export AWS_ACCESS_KEY_ID=
+export AWS_SECRET_ACCESS_KEY=
+export AWS_SESSION_TOKEN=""
+export BUCKET="unblocked-gh-actions-s3-cache-sec-ops-us-west-2"
+export S3_CLASS="STANDARD"
+export KEY="local-test"
+export DEFAULT_KEY="local-test"
+export ARTIFACTS=""
+EOF
+fi
+
 echo "Assuming role: $ROLE_ARN (profile: $PROFILE)"
 
 CREDS=$(aws sts assume-role \
