@@ -178,3 +178,138 @@ func TestGetReadableBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestDeleteObject(t *testing.T) {
+	skipIfNoMinIO(t)
+
+	// Create a temp file to upload
+	tempDir, err := os.MkdirTemp("", "s3_delete_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create test content
+	testKey := "test-delete.tar.zst"
+	testDataDir := tempDir + "/data"
+	os.MkdirAll(testDataDir, 0755)
+	os.WriteFile(testDataDir+"/test.txt", []byte("Test content for deletion"), 0644)
+
+	archivePath := tempDir + "/" + testKey
+	if err := Zip(archivePath, []string{testDataDir}); err != nil {
+		t.Fatalf("failed to create test archive: %v", err)
+	}
+
+	// Change to temp dir so PutObject can find the file
+	origDir, _ := os.Getwd()
+	os.Chdir(tempDir)
+	defer os.Chdir(origDir)
+
+	// Upload the object
+	if err := PutObject(testKey, testBucket, "STANDARD"); err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+
+	// Verify object exists before deletion
+	exists, err := ObjectExists(testKey, testBucket)
+	if err != nil {
+		t.Fatalf("ObjectExists failed: %v", err)
+	}
+	if !exists {
+		t.Fatal("object should exist before deletion")
+	}
+
+	// Test DeleteObject
+	if err := DeleteObject(testKey, testBucket); err != nil {
+		t.Fatalf("DeleteObject failed: %v", err)
+	}
+
+	// Verify object no longer exists
+	exists, err = ObjectExists(testKey, testBucket)
+	if err != nil {
+		t.Fatalf("ObjectExists check after deletion failed: %v", err)
+	}
+	if exists {
+		t.Fatal("object should not exist after deletion")
+	}
+}
+
+func TestDeleteNonExistentObject(t *testing.T) {
+	skipIfNoMinIO(t)
+
+	testKey := "non-existent-object.tar.zst"
+
+	// Verify object doesn't exist
+	exists, err := ObjectExists(testKey, testBucket)
+	if err != nil {
+		t.Fatalf("ObjectExists failed: %v", err)
+	}
+	if exists {
+		t.Fatal("test object should not exist at start of test")
+	}
+
+	// Attempt to delete non-existent object
+	// This should return an error but not crash
+	err = DeleteObject(testKey, testBucket)
+	if err == nil {
+		t.Log("DeleteObject returned nil error for non-existent object (acceptable)")
+	} else {
+		t.Logf("DeleteObject returned error for non-existent object: %v (expected)", err)
+	}
+}
+
+func TestDeleteObjectProperties(t *testing.T) {
+	skipIfNoMinIO(t)
+
+	// Create a temp file to upload
+	tempDir, err := os.MkdirTemp("", "s3_delete_props_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create test content with known size
+	testKey := "test-delete-props.tar.zst"
+	testDataDir := tempDir + "/data"
+	os.MkdirAll(testDataDir, 0755)
+	testContent := "Test content for property verification during deletion"
+	os.WriteFile(testDataDir+"/test.txt", []byte(testContent), 0644)
+
+	archivePath := tempDir + "/" + testKey
+	if err := Zip(archivePath, []string{testDataDir}); err != nil {
+		t.Fatalf("failed to create test archive: %v", err)
+	}
+
+	// Change to temp dir so PutObject can find the file
+	origDir, _ := os.Getwd()
+	os.Chdir(tempDir)
+	defer os.Chdir(origDir)
+
+	// Upload the object
+	if err := PutObject(testKey, testBucket, "STANDARD"); err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+
+	// Get object properties before deletion
+	props, err := ObjectProperties(testKey, testBucket)
+	if err != nil {
+		t.Fatalf("ObjectProperties failed: %v", err)
+	}
+	if props == nil {
+		t.Fatal("ObjectProperties returned nil")
+	}
+	if props.ContentLength == nil || *props.ContentLength == 0 {
+		t.Fatal("object should have non-zero content length")
+	}
+
+	// Delete the object
+	if err := DeleteObject(testKey, testBucket); err != nil {
+		t.Fatalf("DeleteObject failed: %v", err)
+	}
+
+	// Verify object properties are no longer accessible
+	props, err = ObjectProperties(testKey, testBucket)
+	if err == nil && props != nil {
+		t.Fatal("ObjectProperties should fail or return nil for deleted object")
+	}
+}
