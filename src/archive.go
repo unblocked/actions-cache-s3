@@ -13,11 +13,22 @@ import (
 	zstd "github.com/klauspost/compress/zstd"
 )
 
-// Zip - Create .tar.zst file and add dirs and files that match glob patterns
-// Streams directly to file to minimize memory usage
-func Zip(filename string, artifacts []string) error {
+// zstdEncoderOptions returns zstd encoder options based on compression level.
+// Level 0 means use the default.
+func zstdEncoderOptions(level int) []zstd.EOption {
+	opts := []zstd.EOption{zstd.WithEncoderConcurrency(runtime.NumCPU())}
+	if level > 0 {
+		opts = append(opts, zstd.WithEncoderLevel(zstd.EncoderLevel(level)))
+	}
+	return opts
+}
+
+// Zip creates an archive from the given artifact glob patterns.
+// compression controls the format: "zstd" produces .tar.zst, "none" produces a plain .tar.
+// compressionLevel is only used for zstd (1-19, 0 = default).
+func Zip(filename string, artifacts []string, compression string, compressionLevel int) error {
 	start := time.Now()
-	slog.Info("starting to zip", "filename", filename)
+	slog.Info("starting to zip", "filename", filename, "compression", compression)
 
 	// Create output file first - stream directly to it instead of buffering in memory
 	outFile, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(0600))
@@ -26,34 +37,67 @@ func Zip(filename string, artifacts []string) error {
 	}
 	defer outFile.Close()
 
-	// Create zstd writer that writes directly to file
-	zw, err := zstd.NewWriter(outFile, zstd.WithEncoderConcurrency(runtime.NumCPU()))
-	if err != nil {
-		return fmt.Errorf("failed to create zstd writer: %w", err)
+	// Set up the writer chain: tar -> (optional zstd) -> file
+	var tw *tar.Writer
+	var zw *zstd.Encoder
+
+	if compression == CompressionZstd {
+		zw, err = zstd.NewWriter(outFile, zstdEncoderOptions(compressionLevel)...)
+		if err != nil {
+			return fmt.Errorf("failed to create zstd writer: %w", err)
+		}
+		tw = tar.NewWriter(zw)
+	} else {
+		tw = tar.NewWriter(outFile)
 	}
 
-	// Create tar writer on top of zstd
-	tw := tar.NewWriter(zw)
+	fileCount, err := archiveArtifacts(tw, artifacts)
+	if err != nil {
+		return err
+	}
 
+	// Close tar writer first
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("failed to close tar writer: %w", err)
+	}
+
+	// Close zstd writer to flush remaining data (if used)
+	if zw != nil {
+		if err := zw.Close(); err != nil {
+			return fmt.Errorf("failed to close zstd writer: %w", err)
+		}
+	}
+
+	// Get final file size
+	fileInfo, err := outFile.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat file %s: %w", filename, err)
+	}
+
+	elapsed := time.Since(start)
+	slog.Info("successfully zipped", "size", getReadableBytes(fileInfo.Size()), "files", fileCount, "duration", elapsed)
+	return nil
+}
+
+// archiveArtifacts walks the given glob patterns and writes matching files into the tar writer.
+// Returns the number of files added.
+func archiveArtifacts(tw *tar.Writer, artifacts []string) (int, error) {
 	var fileCount int
 	for _, pattern := range artifacts {
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
-			return err
+			return fileCount, err
 		}
 		slog.Debug("processing pattern", "pattern", pattern, "matches", len(matches))
 		if len(matches) == 0 {
 			slog.Warn("no matches for pattern", "pattern", pattern)
 		}
 		for _, match := range matches {
-			// walk through every file in the folder
 			walkErr := filepath.Walk(match, func(file string, fi os.FileInfo, err error) error {
-				// Check for walk errors first
 				if err != nil {
 					return err
 				}
 
-				// generate tar header
 				header, err := tar.FileInfoHeader(fi, file)
 				if err != nil {
 					return err
@@ -63,11 +107,9 @@ func Zip(filename string, artifacts []string) error {
 				// (see https://golang.org/src/archive/tar/common.go?#L626)
 				header.Name = filepath.ToSlash(file)
 
-				// write header
 				if err := tw.WriteHeader(header); err != nil {
 					return err
 				}
-				// if not a dir, write file content
 				if !fi.IsDir() {
 					data, err := os.Open(file)
 					if err != nil {
@@ -84,37 +126,19 @@ func Zip(filename string, artifacts []string) error {
 				return nil
 			})
 			if walkErr != nil {
-				return walkErr
+				return fileCount, walkErr
 			}
 		}
 	}
-
-	// Close tar writer first
-	if err := tw.Close(); err != nil {
-		return fmt.Errorf("failed to close tar writer: %w", err)
-	}
-
-	// Close zstd writer to flush remaining data
-	if err := zw.Close(); err != nil {
-		return fmt.Errorf("failed to close zstd writer: %w", err)
-	}
-
-	// Get final file size
-	fileInfo, err := outFile.Stat()
-	if err != nil {
-		return fmt.Errorf("failed to stat file %s: %w", filename, err)
-	}
-
-	elapsed := time.Since(start)
-	slog.Info("successfully zipped", "size", getReadableBytes(fileInfo.Size()), "files", fileCount, "duration", elapsed)
-	return nil
+	return fileCount, nil
 }
 
-// ZipStream creates a streaming tar.zst archive and returns an io.ReadCloser.
-// The compression happens in a goroutine, allowing the data to be streamed
-// directly to S3 without creating a temp file on disk.
+// ZipStream creates a streaming archive and returns an io.ReadCloser.
+// The archiving (and optional compression) happens in a goroutine, allowing the data
+// to be streamed directly to S3 without creating a temp file on disk.
+// compression controls the format: "zstd" produces tar.zst, "none" produces plain tar.
 // The caller MUST call Close() on the returned reader when done.
-func ZipStream(artifacts []string) (io.ReadCloser, <-chan error) {
+func ZipStream(artifacts []string, compression string, compressionLevel int) (io.ReadCloser, <-chan error) {
 	pr, pw := io.Pipe()
 	errChan := make(chan error, 1)
 
@@ -122,64 +146,25 @@ func ZipStream(artifacts []string) (io.ReadCloser, <-chan error) {
 		defer pw.Close()
 		defer close(errChan)
 
-		// Create zstd writer that writes to the pipe
-		zw, err := zstd.NewWriter(pw, zstd.WithEncoderConcurrency(runtime.NumCPU()))
-		if err != nil {
-			errChan <- fmt.Errorf("failed to create zstd writer: %w", err)
-			return
-		}
+		var tw *tar.Writer
+		var zw *zstd.Encoder
 
-		// Create tar writer on top of zstd
-		tw := tar.NewWriter(zw)
-
-		var fileCount int
-		for _, pattern := range artifacts {
-			matches, err := filepath.Glob(pattern)
+		if compression == CompressionZstd {
+			var err error
+			zw, err = zstd.NewWriter(pw, zstdEncoderOptions(compressionLevel)...)
 			if err != nil {
-				errChan <- err
+				errChan <- fmt.Errorf("failed to create zstd writer: %w", err)
 				return
 			}
-			slog.Debug("streaming pattern", "pattern", pattern, "matches", len(matches))
-			if len(matches) == 0 {
-				slog.Warn("no matches for pattern", "pattern", pattern)
-			}
-			for _, match := range matches {
-				walkErr := filepath.Walk(match, func(file string, fi os.FileInfo, err error) error {
-					if err != nil {
-						return err
-					}
+			tw = tar.NewWriter(zw)
+		} else {
+			tw = tar.NewWriter(pw)
+		}
 
-					header, err := tar.FileInfoHeader(fi, file)
-					if err != nil {
-						return err
-					}
-
-					header.Name = filepath.ToSlash(file)
-
-					if err := tw.WriteHeader(header); err != nil {
-						return err
-					}
-
-					if !fi.IsDir() {
-						data, err := os.Open(file)
-						if err != nil {
-							return err
-						}
-						defer data.Close()
-
-						if _, err := io.Copy(tw, data); err != nil {
-							return err
-						}
-						fileCount++
-						slog.Debug("added file to archive", "file", file, "size", fi.Size())
-					}
-					return nil
-				})
-				if walkErr != nil {
-					errChan <- walkErr
-					return
-				}
-			}
+		fileCount, err := archiveArtifacts(tw, artifacts)
+		if err != nil {
+			errChan <- err
+			return
 		}
 
 		// Close tar writer first
@@ -188,20 +173,23 @@ func ZipStream(artifacts []string) (io.ReadCloser, <-chan error) {
 			return
 		}
 
-		// Close zstd writer to flush remaining data
-		if err := zw.Close(); err != nil {
-			errChan <- fmt.Errorf("failed to close zstd writer: %w", err)
-			return
+		// Close zstd writer to flush remaining data (if used)
+		if zw != nil {
+			if err := zw.Close(); err != nil {
+				errChan <- fmt.Errorf("failed to close zstd writer: %w", err)
+				return
+			}
 		}
 
-		slog.Debug("streaming compression completed", "files", fileCount)
+		slog.Debug("streaming archive completed", "files", fileCount, "compression", compression)
 	}()
 
 	return pr, errChan
 }
 
-// Unzip - Unzip all files and directories inside .tar.zst file
-func Unzip(filename string) error {
+// Unzip extracts an archive created by Zip.
+// compression controls the expected format: "zstd" reads tar.zst, "none" reads plain tar.
+func Unzip(filename string, compression string) error {
 	start := time.Now()
 	file, err := os.Open(filename)
 	if err != nil {
@@ -209,14 +197,19 @@ func Unzip(filename string) error {
 	}
 	defer file.Close()
 
-	// Use all available CPU cores for decompression
-	zr, err := zstd.NewReader(file, zstd.WithDecoderConcurrency(runtime.NumCPU()))
-	if err != nil {
-		return err
-	}
-	defer zr.Close()
+	var tarReader *tar.Reader
+	var zr *zstd.Decoder
 
-	tarReader := tar.NewReader(zr)
+	if compression == CompressionZstd {
+		zr, err = zstd.NewReader(file, zstd.WithDecoderConcurrency(runtime.NumCPU()))
+		if err != nil {
+			return err
+		}
+		defer zr.Close()
+		tarReader = tar.NewReader(zr)
+	} else {
+		tarReader = tar.NewReader(file)
+	}
 
 	var fileCount int
 	for {

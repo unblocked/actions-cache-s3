@@ -56,7 +56,7 @@ func TestPutAndGetObject(t *testing.T) {
 	os.WriteFile(testDataDir+"/test.txt", []byte(testContent), 0644)
 
 	archivePath := tempDir + "/" + testKey
-	if err := Zip(archivePath, []string{testDataDir}); err != nil {
+	if err := Zip(archivePath, []string{testDataDir}, CompressionZstd, 0); err != nil {
 		t.Fatalf("failed to create test archive: %v", err)
 	}
 
@@ -66,7 +66,7 @@ func TestPutAndGetObject(t *testing.T) {
 	defer os.Chdir(origDir)
 
 	// Test PutObject
-	if err := PutObject(testKey, testBucket, "STANDARD"); err != nil {
+	if err := PutObject(testKey, testBucket, "STANDARD", TransferConfig{}); err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
 
@@ -83,7 +83,7 @@ func TestPutAndGetObject(t *testing.T) {
 	os.Remove(archivePath)
 
 	// Test GetObject
-	if err := GetObject(testKey, testBucket); err != nil {
+	if err := GetObject(testKey, testBucket, TransferConfig{}); err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
 
@@ -115,10 +115,10 @@ func TestStreamUpload(t *testing.T) {
 	testKey := "test-stream-upload.tar.zst"
 
 	// Test streaming upload
-	reader, errChan := ZipStream([]string{testDataDir})
+	reader, errChan := ZipStream([]string{testDataDir}, CompressionZstd, 0)
 	ctx := context.Background()
 
-	if err := StreamUpload(ctx, reader, testKey, testBucket, "STANDARD"); err != nil {
+	if err := StreamUpload(ctx, reader, testKey, testBucket, "STANDARD", TransferConfig{}); err != nil {
 		t.Fatalf("StreamUpload failed: %v", err)
 	}
 
@@ -137,6 +137,129 @@ func TestStreamUpload(t *testing.T) {
 	}
 
 	// Clean up
+	DeleteObject(testKey, testBucket)
+}
+
+func TestPutAndGetObjectNoCompression(t *testing.T) {
+	skipIfNoMinIO(t)
+
+	tempDir, err := os.MkdirTemp("", "s3_nocomp_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	testKey := "test-upload-nocomp.tar"
+	testContent := "Hello, S3! Plain tar content."
+
+	testDataDir := tempDir + "/data"
+	os.MkdirAll(testDataDir, 0755)
+	os.WriteFile(testDataDir+"/test.txt", []byte(testContent), 0644)
+
+	archivePath := tempDir + "/" + testKey
+	if err := Zip(archivePath, []string{testDataDir}, CompressionNone, 0); err != nil {
+		t.Fatalf("failed to create plain tar archive: %v", err)
+	}
+
+	origDir, _ := os.Getwd()
+	os.Chdir(tempDir)
+	defer os.Chdir(origDir)
+
+	if err := PutObject(testKey, testBucket, "STANDARD", TransferConfig{}); err != nil {
+		t.Fatalf("PutObject (no compression) failed: %v", err)
+	}
+
+	exists, err := ObjectExists(testKey, testBucket)
+	if err != nil {
+		t.Fatalf("ObjectExists failed: %v", err)
+	}
+	if !exists {
+		t.Fatal("object should exist after upload")
+	}
+
+	os.Remove(archivePath)
+
+	if err := GetObject(testKey, testBucket, TransferConfig{}); err != nil {
+		t.Fatalf("GetObject (no compression) failed: %v", err)
+	}
+
+	if _, err := os.Stat(archivePath); err != nil {
+		t.Fatalf("downloaded file not found: %v", err)
+	}
+
+	// Unzip and verify content round-trips correctly
+	if err := Unzip(testKey, CompressionNone); err != nil {
+		t.Fatalf("Unzip (no compression) failed: %v", err)
+	}
+
+	content, err := os.ReadFile(testDataDir + "/test.txt")
+	if err != nil {
+		t.Fatalf("failed to read extracted file: %v", err)
+	}
+	if string(content) != testContent {
+		t.Errorf("content mismatch: got %q, want %q", string(content), testContent)
+	}
+
+	if err := DeleteObject(testKey, testBucket); err != nil {
+		t.Logf("warning: failed to delete test object: %v", err)
+	}
+}
+
+func TestStreamUploadNoCompression(t *testing.T) {
+	skipIfNoMinIO(t)
+
+	tempDir, err := os.MkdirTemp("", "stream_s3_nocomp_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	testDataDir := tempDir + "/data"
+	os.MkdirAll(testDataDir, 0755)
+	os.WriteFile(testDataDir+"/stream_test.txt", []byte("Stream upload plain tar content"), 0644)
+
+	testKey := "test-stream-upload-nocomp.tar"
+
+	reader, errChan := ZipStream([]string{testDataDir}, CompressionNone, 0)
+	ctx := context.Background()
+
+	if err := StreamUpload(ctx, reader, testKey, testBucket, "STANDARD", TransferConfig{}); err != nil {
+		t.Fatalf("StreamUpload (no compression) failed: %v", err)
+	}
+
+	if compressErr := <-errChan; compressErr != nil {
+		t.Fatalf("archive error: %v", compressErr)
+	}
+
+	exists, err := ObjectExists(testKey, testBucket)
+	if err != nil {
+		t.Fatalf("ObjectExists failed: %v", err)
+	}
+	if !exists {
+		t.Fatal("streamed object should exist after upload")
+	}
+
+	// Download and verify the plain tar round-trips
+	origDir, _ := os.Getwd()
+	os.Chdir(tempDir)
+	defer os.Chdir(origDir)
+
+	if err := GetObject(testKey, testBucket, TransferConfig{}); err != nil {
+		t.Fatalf("GetObject (no compression) failed: %v", err)
+	}
+
+	if err := Unzip(testKey, CompressionNone); err != nil {
+		t.Fatalf("Unzip (no compression) failed: %v", err)
+	}
+
+	content, err := os.ReadFile(testDataDir + "/stream_test.txt")
+	if err != nil {
+		t.Fatalf("failed to read extracted file: %v", err)
+	}
+	if string(content) != "Stream upload plain tar content" {
+		t.Errorf("content mismatch: got %q, want %q", string(content), "Stream upload plain tar content")
+	}
+
 	DeleteObject(testKey, testBucket)
 }
 
@@ -196,7 +319,7 @@ func TestDeleteObject(t *testing.T) {
 	os.WriteFile(testDataDir+"/test.txt", []byte("Test content for deletion"), 0644)
 
 	archivePath := tempDir + "/" + testKey
-	if err := Zip(archivePath, []string{testDataDir}); err != nil {
+	if err := Zip(archivePath, []string{testDataDir}, CompressionZstd, 0); err != nil {
 		t.Fatalf("failed to create test archive: %v", err)
 	}
 
@@ -206,7 +329,7 @@ func TestDeleteObject(t *testing.T) {
 	defer os.Chdir(origDir)
 
 	// Upload the object
-	if err := PutObject(testKey, testBucket, "STANDARD"); err != nil {
+	if err := PutObject(testKey, testBucket, "STANDARD", TransferConfig{}); err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
 
@@ -276,7 +399,7 @@ func TestDeleteObjectProperties(t *testing.T) {
 	os.WriteFile(testDataDir+"/test.txt", []byte(testContent), 0644)
 
 	archivePath := tempDir + "/" + testKey
-	if err := Zip(archivePath, []string{testDataDir}); err != nil {
+	if err := Zip(archivePath, []string{testDataDir}, CompressionZstd, 0); err != nil {
 		t.Fatalf("failed to create test archive: %v", err)
 	}
 
@@ -286,7 +409,7 @@ func TestDeleteObjectProperties(t *testing.T) {
 	defer os.Chdir(origDir)
 
 	// Upload the object
-	if err := PutObject(testKey, testBucket, "STANDARD"); err != nil {
+	if err := PutObject(testKey, testBucket, "STANDARD", TransferConfig{}); err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
 

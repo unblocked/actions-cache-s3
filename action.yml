@@ -35,6 +35,27 @@ inputs:
     description: "Specifies the desired Storage Class for the object."
     required: false
     default: STANDARD
+  compression:
+    description: "Compression method for the archive. Options: zstd, none (plain tar)"
+    required: false
+    default: zstd
+  compression-level:
+    description: "Compression level (zstd: 1-19). Leave empty for codec default. Ignored when compression is 'none'."
+    required: false
+  upload-concurrency:
+    description: "Number of parallel parts for multipart S3 upload"
+    required: false
+    default: "10"
+  download-concurrency:
+    description: "Number of parallel parts for multipart S3 download"
+    required: false
+    default: "10"
+  upload-part-size:
+    description: "Part size for multipart S3 upload (e.g. 10MB, 50MiB). Leave empty for auto-calculation."
+    required: false
+  download-part-size:
+    description: "Part size for multipart S3 download (e.g. 10MB, 50MiB). Default: 5MB."
+    required: false
 runs:
   using: "composite"
   steps:
@@ -52,3 +73,9 @@ runs:
         DEFAULT_KEY: ${{ inputs.default-key }}
         ARTIFACTS: ${{ inputs.artifacts }}
         OS: ${{ runner.os }}
+        COMPRESSION: ${{ inputs.compression }}
+        COMPRESSION_LEVEL: ${{ inputs.compression-level }}
+        UPLOAD_CONCURRENCY: ${{ inputs.upload-concurrency }}
+        DOWNLOAD_CONCURRENCY: ${{ inputs.download-concurrency }}
+        UPLOAD_PART_SIZE: ${{ inputs.upload-part-size }}
+        DOWNLOAD_PART_SIZE: ${{ inputs.download-part-size }}

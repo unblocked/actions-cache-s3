@@ -48,7 +48,7 @@ func TestZipAndUnzip(t *testing.T) {
 
 	// Test Zip with relative path
 	archivePath := "test.tar.zst"
-	if err := Zip(archivePath, []string{testDir}); err != nil {
+	if err := Zip(archivePath, []string{testDir}, CompressionZstd, 0); err != nil {
 		t.Fatalf("Zip failed: %v", err)
 	}
 
@@ -66,7 +66,7 @@ func TestZipAndUnzip(t *testing.T) {
 	os.RemoveAll(testDir)
 
 	// Unzip
-	if err := Unzip(archivePath); err != nil {
+	if err := Unzip(archivePath, CompressionZstd); err != nil {
 		t.Fatalf("Unzip failed: %v", err)
 	}
 
@@ -112,7 +112,7 @@ func TestZipStream(t *testing.T) {
 	}
 
 	// Test ZipStream
-	reader, errChan := ZipStream([]string{testDir})
+	reader, errChan := ZipStream([]string{testDir}, CompressionZstd, 0)
 
 	// Read all data from the stream
 	data, err := io.ReadAll(reader)
@@ -141,7 +141,7 @@ func TestZipStream(t *testing.T) {
 	os.RemoveAll(testDir)
 
 	// Unzip
-	if err := Unzip(archivePath); err != nil {
+	if err := Unzip(archivePath, CompressionZstd); err != nil {
 		t.Fatalf("failed to unzip streamed archive: %v", err)
 	}
 
@@ -284,7 +284,7 @@ func TestZipGlobPatterns(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			archivePath := "test_" + tc.name + ".tar.zst"
 
-			err := Zip(archivePath, tc.patterns)
+			err := Zip(archivePath, tc.patterns, CompressionZstd, 0)
 			if tc.expectSuccess && err != nil {
 				t.Fatalf("Zip failed: %v", err)
 			}
@@ -302,7 +302,7 @@ func TestZipGlobPatterns(t *testing.T) {
 			os.Chdir(extractDir)
 			defer os.Chdir("..")
 
-			if err := Unzip("../" + archivePath); err != nil {
+			if err := Unzip("../"+archivePath, CompressionZstd); err != nil {
 				// Empty archive is valid
 				if len(tc.expectFiles) == 0 {
 					return
@@ -406,7 +406,7 @@ func TestZipStreamGlobPatterns(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			reader, errChan := ZipStream(tc.patterns)
+			reader, errChan := ZipStream(tc.patterns, CompressionZstd, 0)
 
 			data, err := io.ReadAll(reader)
 			if err != nil {
@@ -434,7 +434,7 @@ func TestZipStreamGlobPatterns(t *testing.T) {
 			os.Chdir(extractDir)
 			defer os.Chdir("..")
 
-			if err := Unzip("../" + archivePath); err != nil {
+			if err := Unzip("../"+archivePath, CompressionZstd); err != nil {
 				t.Fatalf("Unzip failed: %v", err)
 			}
 
@@ -463,5 +463,134 @@ func TestZipStreamGlobPatterns(t *testing.T) {
 				t.Errorf("expected %d files, got %d: %v", len(tc.expectFiles), len(extractedFiles), extractedFiles)
 			}
 		})
+	}
+}
+
+func TestZipAndUnzipNoCompression(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "archive_nocomp_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	testDir := "testdata_nocomp"
+	fullTestDir := filepath.Join(tempDir, testDir)
+	if err := os.MkdirAll(fullTestDir, 0755); err != nil {
+		t.Fatalf("failed to create test dir: %v", err)
+	}
+
+	files := map[string]string{
+		"file1.txt":        "Hello, plain tar!",
+		"subdir/file2.txt": "Nested in plain tar",
+	}
+
+	for name, content := range files {
+		path := filepath.Join(fullTestDir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatalf("failed to create dir for %s: %v", name, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("failed to write %s: %v", name, err)
+		}
+	}
+
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("failed to chdir to temp: %v", err)
+	}
+	defer os.Chdir(origDir)
+
+	archivePath := "test_nocomp.tar"
+	if err := Zip(archivePath, []string{testDir}, CompressionNone, 0); err != nil {
+		t.Fatalf("Zip with CompressionNone failed: %v", err)
+	}
+
+	info, err := os.Stat(archivePath)
+	if err != nil {
+		t.Fatalf("archive not created: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("archive is empty")
+	}
+	t.Logf("Plain tar archive size: %d bytes", info.Size())
+
+	// Remove originals and unzip
+	os.RemoveAll(testDir)
+
+	if err := Unzip(archivePath, CompressionNone); err != nil {
+		t.Fatalf("Unzip with CompressionNone failed: %v", err)
+	}
+
+	for name, expectedContent := range files {
+		extractedPath := filepath.Join(testDir, name)
+		content, err := os.ReadFile(extractedPath)
+		if err != nil {
+			t.Errorf("failed to read extracted %s: %v", name, err)
+			continue
+		}
+		if string(content) != expectedContent {
+			t.Errorf("content mismatch for %s: got %q, want %q", name, string(content), expectedContent)
+		}
+	}
+}
+
+func TestZipStreamNoCompression(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "zipstream_nocomp_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
+	defer os.Chdir(origDir)
+
+	testDir := "streamdata_nocomp"
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("failed to create test dir: %v", err)
+	}
+
+	testContent := "Hello from plain tar ZipStream!"
+	testFile := filepath.Join(testDir, "stream_test.txt")
+	if err := os.WriteFile(testFile, []byte(testContent), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	reader, errChan := ZipStream([]string{testDir}, CompressionNone, 0)
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("failed to read from stream: %v", err)
+	}
+	reader.Close()
+
+	if compressErr := <-errChan; compressErr != nil {
+		t.Fatalf("archive error: %v", compressErr)
+	}
+
+	if len(data) == 0 {
+		t.Fatal("stream produced no data")
+	}
+	t.Logf("Plain tar stream produced %d bytes", len(data))
+
+	archivePath := "stream_nocomp.tar"
+	if err := os.WriteFile(archivePath, data, 0644); err != nil {
+		t.Fatalf("failed to write archive: %v", err)
+	}
+
+	os.RemoveAll(testDir)
+
+	if err := Unzip(archivePath, CompressionNone); err != nil {
+		t.Fatalf("failed to unzip plain tar streamed archive: %v", err)
+	}
+
+	content, err := os.ReadFile(testFile)
+	if err != nil {
+		t.Fatalf("failed to read extracted file: %v", err)
+	}
+	if string(content) != testContent {
+		t.Errorf("content mismatch: got %q, want %q", string(content), testContent)
 	}
 }

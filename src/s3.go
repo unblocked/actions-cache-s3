@@ -24,9 +24,75 @@ const (
 	minPartSize = 5 * 1024 * 1024   // 5 MiB minimum (AWS requirement)
 	maxPartSize = 100 * 1024 * 1024 // 100 MiB maximum (practical limit)
 
+	// Default download part size
+	defaultDownloadPartSize = minPartSize
+
 	// Maximum number of parts for multipart upload
 	maxUploadParts = 10000
 )
+
+// TransferConfig holds configurable S3 transfer parameters.
+// Zero values mean "use defaults".
+type TransferConfig struct {
+	UploadConcurrency   int   // 0 = defaultConcurrency
+	DownloadConcurrency int   // 0 = defaultConcurrency
+	UploadPartSize      int64 // 0 = auto-calculated from file size
+	DownloadPartSize    int64 // 0 = defaultDownloadPartSize
+}
+
+func (tc TransferConfig) uploadConcurrency() int {
+	if tc.UploadConcurrency > 0 {
+		return tc.UploadConcurrency
+	}
+	return defaultConcurrency
+}
+
+func (tc TransferConfig) downloadConcurrency() int {
+	if tc.DownloadConcurrency > 0 {
+		return tc.DownloadConcurrency
+	}
+	return defaultConcurrency
+}
+
+func (tc TransferConfig) downloadPartSize() int64 {
+	if tc.DownloadPartSize > 0 {
+		return tc.DownloadPartSize
+	}
+	return defaultDownloadPartSize
+}
+
+// resolveUploadPartSize returns the part size for uploads.
+// If a user-specified size is set, it is clamped to AWS limits.
+// Otherwise, the optimal size is calculated from the file size.
+func (tc TransferConfig) resolveUploadPartSize(fileSize int64) int64 {
+	if tc.UploadPartSize > 0 {
+		ps := tc.UploadPartSize
+		if ps < minPartSize {
+			ps = minPartSize
+		}
+		if ps > maxPartSize {
+			ps = maxPartSize
+		}
+		return ps
+	}
+	return optimalPartSize(fileSize)
+}
+
+// resolveStreamUploadPartSize returns the part size for streaming uploads
+// where the total size is unknown upfront.
+func (tc TransferConfig) resolveStreamUploadPartSize() int64 {
+	if tc.UploadPartSize > 0 {
+		ps := tc.UploadPartSize
+		if ps < minPartSize {
+			ps = minPartSize
+		}
+		if ps > maxPartSize {
+			ps = maxPartSize
+		}
+		return ps
+	}
+	return minPartSize
+}
 
 // getS3Client creates a new S3 client with the configured region and optional custom endpoint
 // Supports S3 Transfer Acceleration when S3_USE_ACCELERATE=true
@@ -119,8 +185,9 @@ func GetLatestObject(key string, bucket string) (string, error) {
 	return *files[0].Key, nil
 }
 
-// PutObject - Upload object to s3 bucket with optimized multipart upload
-func PutObject(key string, bucket string, s3Class string) error {
+// PutObject uploads an object to S3 with optimized multipart upload.
+// Transfer concurrency and part size are controlled via tc.
+func PutObject(key string, bucket string, s3Class string, tc TransferConfig) error {
 	session, err := getS3Client(context.TODO())
 	if err != nil {
 		return err
@@ -138,19 +205,19 @@ func PutObject(key string, bucket string, s3Class string) error {
 	}
 	fileSize := fileInfo.Size()
 
-	// Calculate optimal part size based on file size
-	partSize := optimalPartSize(fileSize)
+	partSize := tc.resolveUploadPartSize(fileSize)
+	concurrency := tc.uploadConcurrency()
 
 	uploader := manager.NewUploader(session, func(u *manager.Uploader) {
 		u.PartSize = partSize
-		u.Concurrency = defaultConcurrency
+		u.Concurrency = concurrency
 	})
 
 	start := time.Now()
 	slog.Info("uploading cache",
 		"size", getReadableBytes(fileSize),
 		"part_size", getReadableBytes(partSize),
-		"concurrency", defaultConcurrency,
+		"concurrency", concurrency,
 	)
 
 	_, err = uploader.Upload(context.TODO(), &s3.PutObjectInput{
@@ -175,21 +242,27 @@ func PutObject(key string, bucket string, s3Class string) error {
 
 // StreamUpload uploads data from an io.Reader directly to S3 without creating a temp file.
 // This is useful for streaming compressed data directly to S3.
-func StreamUpload(ctx context.Context, reader io.Reader, key string, bucket string, s3Class string) error {
+func StreamUpload(ctx context.Context, reader io.Reader, key string, bucket string, s3Class string, tc TransferConfig) error {
 	session, err := getS3Client(ctx)
 	if err != nil {
 		return err
 	}
 
+	partSize := tc.resolveStreamUploadPartSize()
+	concurrency := tc.uploadConcurrency()
+
 	uploader := manager.NewUploader(session, func(u *manager.Uploader) {
-		// For streaming uploads, we don't know the file size upfront
-		// Use a reasonable default part size
-		u.PartSize = minPartSize
-		u.Concurrency = defaultConcurrency
+		u.PartSize = partSize
+		u.Concurrency = concurrency
 	})
 
 	start := time.Now()
-	slog.Info("streaming upload to S3", "key", key, "bucket", bucket)
+	slog.Info("streaming upload to S3",
+		"key", key,
+		"bucket", bucket,
+		"part_size", getReadableBytes(partSize),
+		"concurrency", concurrency,
+	)
 
 	result, err := uploader.Upload(ctx, &s3.PutObjectInput{
 		Bucket:       aws.String(bucket),
@@ -211,8 +284,9 @@ func StreamUpload(ctx context.Context, reader io.Reader, key string, bucket stri
 	return nil
 }
 
-// GetObject - Get object from s3 bucket with optimized multipart download
-func GetObject(key string, bucket string) error {
+// GetObject downloads an object from S3 with optimized multipart download.
+// Transfer concurrency and part size are controlled via tc.
+func GetObject(key string, bucket string, tc TransferConfig) error {
 	start := time.Now()
 	session, err := getS3Client(context.TODO())
 	if err != nil {
@@ -225,10 +299,19 @@ func GetObject(key string, bucket string) error {
 	}
 	defer outFile.Close()
 
+	partSize := tc.downloadPartSize()
+	concurrency := tc.downloadConcurrency()
+
 	downloader := manager.NewDownloader(session, func(d *manager.Downloader) {
-		d.Concurrency = defaultConcurrency
-		d.PartSize = minPartSize // 5 MiB - good balance for downloads
+		d.Concurrency = concurrency
+		d.PartSize = partSize
 	})
+
+	slog.Info("downloading cache",
+		"key", key,
+		"part_size", getReadableBytes(partSize),
+		"concurrency", concurrency,
+	)
 
 	bytesDownloaded, err := downloader.Download(context.TODO(), outFile, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
